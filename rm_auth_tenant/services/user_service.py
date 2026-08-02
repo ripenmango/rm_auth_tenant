@@ -45,6 +45,8 @@ class UserService:
         assign_default_persona: bool = True,
         personas: list[Persona] | None = None,
         default_persona: Persona | None = None,
+        is_active: bool = True,
+        is_email_verified: bool = True,
     ):
         """
         tenant_id=None falls back to the configured default tenant (see
@@ -70,7 +72,14 @@ class UserService:
           right after creation.
         """
         logger.info("user.created", tenant_id=tenant_id, username=username)
-        user = self.accounts.create_user(tenant_id, username, password, email)
+        user = self.accounts.create_user(
+            tenant_id,
+            username,
+            password,
+            email,
+            is_active=is_active,
+            is_email_verified=is_email_verified,
+        )
 
         if personas is not None:
             if default_persona is not None and default_persona not in personas:

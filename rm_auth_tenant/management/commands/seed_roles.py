@@ -39,10 +39,10 @@ class Command(BaseCommand):
             "--tenant",
             default=None,
             help="Tenant id to seed. Omit to use the configured default tenant "
-                 "(settings.RM_AUTH['DEFAULT_TENANT_ID'], normally 'default' -- "
-                 "see default-tenant-and-persona.md) rather than inventing a "
-                 "separate one; only pass this explicitly for a real, distinct "
-                 "(e.g. enterprise) tenant.",
+            "(settings.RM_AUTH['DEFAULT_TENANT_ID'], normally 'default' -- "
+            "see default-tenant-and-persona.md) rather than inventing a "
+            "separate one; only pass this explicitly for a real, distinct "
+            "(e.g. enterprise) tenant.",
         )
         parser.add_argument(
             "--admin-username",
@@ -67,15 +67,17 @@ class Command(BaseCommand):
             "--with-demo-persona",
             action="store_true",
             help="Also create a `workflow_editor` role + `Branch Manager` persona and "
-                 "assign it to the admin user alongside `Platform Admin`, to exercise "
-                 "the multi-persona login/selection flow. Off by default so a freshly "
-                 "seeded admin has exactly one persona and can log in without "
-                 "`persona_id` -- see default-tenant-and-persona.md.",
+            "assign it to the admin user alongside `Platform Admin`, to exercise "
+            "the multi-persona login/selection flow. Off by default so a freshly "
+            "seeded admin has exactly one persona and can log in without "
+            "`persona_id` -- see default-tenant-and-persona.md.",
         )
 
     @transaction.atomic
     def handle(self, *args, **options):
-        tenant_id = options["tenant"] or settings.RM_AUTH.get("DEFAULT_TENANT_ID", "default")
+        tenant_id = options["tenant"] or settings.RM_AUTH.get(
+            "DEFAULT_TENANT_ID", "default"
+        )
         admin_username = options["admin_username"]
         admin_email = options["admin_email"]
         admin_password = options["admin_password"]
@@ -101,7 +103,11 @@ class Command(BaseCommand):
         # (promote_tenant_to_dedicated_schema), never implicit here.
         tenant, _ = Tenant.objects.get_or_create(
             id=tenant_id,
-            defaults={"name": tenant_id, "jwt_algorithm": "HS256", "schema_name": "public"},
+            defaults={
+                "name": tenant_id,
+                "jwt_algorithm": "HS256",
+                "schema_name": "public",
+            },
         )
         # django-tenants requires at least one Domain row per tenant even
         # though this platform doesn't resolve tenants by hostname (see the
@@ -165,11 +171,11 @@ class Command(BaseCommand):
         if editor_persona is not None:
             role_service.assign_persona(tenant_id, user.id, editor_persona)
 
-        persona_summary = (
-            f"{admin_persona.name!r} (role:manage, persona:manage, user:manage) [default]"
-        )
+        persona_summary = f"{admin_persona.name!r} (role:manage, persona:manage, user:manage) [default]"
         if editor_persona is not None:
-            persona_summary += f", {editor_persona.name!r} (workflow:edit, workflow:view)"
+            persona_summary += (
+                f", {editor_persona.name!r} (workflow:edit, workflow:view)"
+            )
 
         self.stdout.write(
             self.style.SUCCESS(

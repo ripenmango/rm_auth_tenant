@@ -35,6 +35,14 @@ dev = [
 include = ["rm_auth_tenant*"]
 exclude = ["rm_auth_tenant.tests*"]
 
+# setuptools' packages.find only collects .py files by default -- non-Python
+# data (the Casbin model.conf that RM_AUTH["CASBIN_MODEL_PATH"] points at)
+# needs an explicit package-data entry or it's silently left out of every
+# built wheel, breaking any consumer as soon as the policy engine tries to
+# load it.
+[tool.setuptools.package-data]
+rm_auth_tenant = ["policy/*.conf"]
+
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings"
 python_files = ["test_*.py"]

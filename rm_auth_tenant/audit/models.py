@@ -37,6 +37,9 @@ class SecurityEvent(RMAuditModel):
         ("role_revoked", "role_revoked"),
         ("permission_granted", "permission_granted"),
         ("permission_revoked", "permission_revoked"),
+        ("user_signed_up", "user_signed_up"),
+        ("email_verification_sent", "email_verification_sent"),
+        ("email_verified", "email_verified"),
     ]
 
     tenant_id = models.CharField(max_length=64, db_index=True)

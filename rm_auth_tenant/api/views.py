@@ -30,16 +30,23 @@ from rm_auth_tenant.api.serializers import (
     PersonaDetailSerializer,
     RefreshSerializer,
     RoleSerializer,
+    SignupSerializer,
     SwitchPersonaSerializer,
     TokenPairSerializer,
     UpdateUserSerializer,
     UserSerializer,
+    VerifyEmailSerializer,
 )
+from rm_auth_tenant.audit.service import AuditService
 from rm_auth_tenant.authorization.policy_permission import RequiresPermission
 from rm_auth_tenant.services.authentication_service import (
     AuthenticationError,
     AuthenticationService,
     PersonaSelectionRequired,
+)
+from rm_auth_tenant.services.email_verification_service import (
+    EmailVerificationError,
+    EmailVerificationService,
 )
 from rm_auth_tenant.services.role_service import RoleService, RoleServiceError
 from rm_auth_tenant.services.user_service import UserService, UserServiceError
@@ -275,6 +282,160 @@ class SwitchPersonaView(RMAPIView):
             raise AuthenticationFailed(str(exc))
 
         return envelope(data=_token_pair_payload(token_pair, persona))
+
+
+class SignupView(RMAPIView):
+    """
+    POST /api/rm_auth_tenant/signup -- public, unauthenticated self-
+    registration for the community edition (a user needs an account
+    before they have any credentials to call the permissioned POST
+    /users endpoint with). Uses RMAPIView's default `AllowAny` --
+    deliberately not overridden, same as Login/Refresh above.
+
+    Thin wrapper around the exact same UserService.create_user() that
+    UserViewSet.create uses, just with a public-signup-shaped input:
+    `email` is the required, primary field; `username` defaults to
+    `email` when omitted; `tenant`/`persona_ids`/`default_persona_id`
+    are all optional with the same defaulting behavior as POST /users
+    (omitted tenant -> configured default/shared tenant; omitted
+    persona_ids -> the tenant's lazily-created "Default" persona -- see
+    default-tenant-and-persona.md).
+    """
+
+    @rm_swagger(
+        summary="Self-register a new user (community edition signup)",
+        description=(
+            "Public signup endpoint -- no authentication required. `email` "
+            "is the required, primary identifier. `username` defaults to "
+            "`email` if omitted. `tenant` is optional -- omit it to land in "
+            "the configured default/shared tenant, same as /login and "
+            "/refresh (see default-tenant-and-persona.md). `persona_ids`/"
+            "`default_persona_id` are optional too -- omit them entirely and "
+            "the tenant's lazily-created 'Default' persona is assigned "
+            "automatically, exactly as it is on POST /users (see "
+            "UserService.create_user)."
+        ),
+        request=SignupSerializer,
+        success=UserSerializer,
+        meta={"email_verification_required": serializers.BooleanField()},
+        responses={
+            400: error_response(
+                "Invalid payload, email/username already taken, or unknown "
+                "persona id(s)."
+            )
+        },
+        tags=["Users"],
+    )
+    def post(self, request):
+        logger.info("Signup requested")
+        serializer = SignupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        # Same fallback UserService.create_user/UserManager.create_user
+        # already apply for tenant_id=None -- resolved explicitly here too
+        # so persona lookups below (which need a concrete tenant id) land
+        # in the same tenant the user is actually created in.
+        tenant_id = _resolve_tenant_id(data)
+        username = data.get("username") or data["email"]
+
+        persona_ids = data.get("persona_ids") or []
+        personas = None
+        default_persona = None
+        if persona_ids:
+            role_service = RoleService()
+            try:
+                personas = [
+                    role_service.get_persona(tenant_id, pid) for pid in persona_ids
+                ]
+            except RoleServiceError as exc:
+                raise ValidationError(str(exc))
+
+            default_persona_id = data.get("default_persona_id")
+            if default_persona_id is not None:
+                default_persona = next(
+                    (p for p in personas if p.id == default_persona_id), None
+                )
+                if default_persona is None:
+                    raise ValidationError(
+                        "default_persona_id must be one of persona_ids"
+                    )
+
+        # Feature-flagged, default False (see RM_AUTH["SIGNUP_EMAIL_VERIFICATION_ENABLED"]
+        # in settings.py) -- OFF, a signup is active/verified immediately,
+        # same as today. ON, a new signup starts inactive + unverified until
+        # it clicks the emailed link (see EmailVerificationService.verify),
+        # since is_active=False is what actually blocks login in the
+        # meantime (AccountRepository.get_user already filters on it).
+        verification_enabled = EmailVerificationService.is_enabled()
+
+        try:
+            user = UserService().create_user(
+                tenant_id=tenant_id,
+                username=username,
+                password=data["password"],
+                email=data["email"],
+                personas=personas,
+                default_persona=default_persona,
+                is_active=not verification_enabled,
+                is_email_verified=not verification_enabled,
+            )
+        except IntegrityError:
+            raise ValidationError(
+                "A user with this email or username already exists."
+            )
+
+        audit = AuditService()
+        audit.record_event(tenant_id, "user_signed_up", user_id=user.id, metadata={"email": user.email})
+
+        if verification_enabled:
+            EmailVerificationService().send_verification_email(tenant_id, user)
+
+        return Response(
+            UserSerializer(user).data,
+            meta={"email_verification_required": verification_enabled},
+            status=201,
+        )
+
+
+class VerifyEmailView(RMAPIView):
+    """
+    POST /api/rm_auth_tenant/verify-email -- public, unauthenticated.
+    Completes the signup verification flow started by SignupView when
+    RM_AUTH["SIGNUP_EMAIL_VERIFICATION_ENABLED"] is on: exchanges the token
+    from the emailed link for an activated/verified account.
+
+    Kept usable even while the feature flag is off (a token from before it
+    was disabled, or a manually-issued one, still verifies) -- there's
+    nothing unsafe about honoring a valid signed token either way, and it
+    avoids a confusing 404/disabled response for a link someone already has
+    in their inbox.
+    """
+
+    @rm_swagger(
+        summary="Verify a signup email address",
+        description=(
+            "Exchanges the token from the verification email (see "
+            "POST /signup) for an activated, verified account. Idempotent -- "
+            "verifying an already-verified account is a no-op, not an error."
+        ),
+        request=VerifyEmailSerializer,
+        success=UserSerializer,
+        responses={
+            400: error_response("Verification link is invalid, expired, or its user no longer exists.")
+        },
+        tags=["Users"],
+    )
+    def post(self, request):
+        serializer = VerifyEmailSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            user = EmailVerificationService().verify(serializer.validated_data["token"])
+        except EmailVerificationError as exc:
+            raise ValidationError(str(exc))
+
+        return Response(UserSerializer(user).data)
 
 
 class UserViewSet(RMModelViewSet):

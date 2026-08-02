@@ -75,6 +75,19 @@ class User(RMAbstractBaseUser, RMSluggedModel):
     slug = models.SlugField(max_length=255, unique=False, blank=True)
 
     is_active = models.BooleanField(default=True)
+    # Default True so every existing creation path (POST /users, seed/
+    # management commands, admin) is unaffected -- only SignupView ever
+    # passes False, and only when RM_AUTH["SIGNUP_EMAIL_VERIFICATION_ENABLED"]
+    # is on (see EmailVerificationService / default-tenant-and-persona.md).
+    # NOTE: while a signup is pending verification, SignupView also sets
+    # is_active=False (see EmailVerificationService.verify) -- reusing the
+    # existing is_active gate is what actually blocks login pre-verification
+    # (AccountRepository.get_user already filters on it), rather than adding
+    # a second login-time check. The tradeoff: list_users/get_user also
+    # filter on is_active, so a pending-verification signup won't show up to
+    # tenant admins via GET /users until it's verified, same as a
+    # deactivated user wouldn't.
+    is_email_verified = models.BooleanField(default=True)
     is_tenant_admin = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
 

@@ -1,3 +1,6 @@
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+
 from drf_base_app.rest_framework import serializers 
 
 
@@ -53,6 +56,11 @@ class UserSerializer(serializers.RMSerializer):
     username = serializers.CharField()
     email = serializers.EmailField()
     is_active = serializers.BooleanField()
+    # True for every user except one created via public signup while
+    # RM_AUTH["SIGNUP_EMAIL_VERIFICATION_ENABLED"] is on and still pending
+    # verification (see SignupSerializer/SignupView/
+    # EmailVerificationService).
+    is_email_verified = serializers.BooleanField()
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
 
@@ -72,9 +80,59 @@ class CreateUserSerializer(serializers.RMSerializer):
     default_persona_id = serializers.IntegerField(required=False)
 
 
+class SignupSerializer(serializers.RMSerializer):
+    """
+    Public, unauthenticated self-registration for the community edition --
+    used by SignupView, NOT by UserViewSet (that still requires
+    `RequiresPermission("user", "manage")`, which a brand-new anonymous
+    caller can never have). Same shape as CreateUserSerializer, except:
+
+      - `email` is required (it's the primary identifier for signup) and
+        `username` is optional -- SignupView defaults `username` to
+        `email` when omitted, then delegates to the exact same
+        UserService.create_user() as POST /users, so `tenant`,
+        `persona_ids`, and `default_persona_id` all default exactly the
+        same way (see CreateUserSerializer above / default-tenant-and-
+        persona.md).
+      - `password` is validated against Django's configured
+        AUTH_PASSWORD_VALIDATORS (POST /users -- an authenticated,
+        permissioned action -- deliberately leaves that judgment call to
+        the caller; a public self-serve signup can't).
+    """
+
+    email = serializers.EmailField()
+    username = serializers.CharField(required=False, allow_blank=True, default="")
+    password = serializers.CharField(write_only=True)
+    # Optional -- omit for the non-enterprise / self-serve case and the
+    # configured default/shared tenant is used, same as Login/Refresh (see
+    # default-tenant-and-persona.md).
+    tenant = serializers.CharField(required=False)
+    # Both optional, same semantics as CreateUserSerializer -- omit entirely
+    # and the tenant's lazily-created "Default" persona is assigned
+    # automatically.
+    persona_ids = serializers.ListField(
+        child=serializers.IntegerField(), required=False, default=list
+    )
+    default_persona_id = serializers.IntegerField(required=False)
+
+    def validate_password(self, value):
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return value
+
+
 class UpdateUserSerializer(serializers.RMSerializer):
     email = serializers.EmailField(required=False)
     is_active = serializers.BooleanField(required=False)
+
+
+class VerifyEmailSerializer(serializers.RMSerializer):
+    """Input for POST /verify-email -- the signed token from the link sent
+    by EmailVerificationService.send_verification_email."""
+
+    token = serializers.CharField()
 
 
 class RoleSerializer(serializers.RMSerializer):

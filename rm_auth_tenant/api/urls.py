@@ -8,8 +8,10 @@ from rm_auth_tenant.api.views import (
     PersonaViewSet,
     RefreshView,
     RoleViewSet,
+    SignupView,
     SwitchPersonaView,
     UserViewSet,
+    VerifyEmailView,
 )
 
 # trailing_slash=False to match this app's other endpoints ("login", not
@@ -21,6 +23,8 @@ router.register("roles", RoleViewSet, basename="rm_auth_role")
 router.register("personas", PersonaViewSet, basename="rm_auth_persona")
 
 urlpatterns = [
+    path("signup", SignupView.as_view(), name="rm_auth_signup"),
+    path("verify-email", VerifyEmailView.as_view(), name="rm_auth_verify_email"),
     path("login", LoginView.as_view(), name="rm_auth_login"),
     path("refresh", RefreshView.as_view(), name="rm_auth_refresh"),
     path("logout", LogoutView.as_view(), name="rm_auth_logout"),

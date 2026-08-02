@@ -143,6 +143,45 @@ AUDIT_SYSTEM_USERNAME = "system"
 
 AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
 
+# Standard Django password-strength rules, applied by SignupSerializer's
+# validate_password (see api/serializers.py) via django.contrib.auth
+# .password_validation.validate_password. Also used anywhere else in the
+# project that calls validate_password -- there's only one configured set of
+# rules, not a bespoke one per call site.
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": int(os.environ.get("RM_AUTH_PASSWORD_MIN_LENGTH", "8"))},
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
+    },
+]
+
+# --- Outbound email (signup verification, etc.) ---
+# Console backend by default -- prints the email (and its verification
+# link/token) to stdout instead of actually sending anything, which is all
+# local/dev needs. Point DJANGO_EMAIL_BACKEND at
+# 'django.core.mail.backends.smtp.EmailBackend' (plus the EMAIL_HOST_* vars
+# below) once there's a real SMTP provider to send through in production.
+EMAIL_BACKEND = os.environ.get(
+    "DJANGO_EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
+)
+EMAIL_HOST = os.environ.get("DJANGO_EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.environ.get("DJANGO_EMAIL_PORT", "25"))
+EMAIL_HOST_USER = os.environ.get("DJANGO_EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("DJANGO_EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.environ.get("DJANGO_EMAIL_USE_TLS", "false").lower() == "true"
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DJANGO_DEFAULT_FROM_EMAIL", "no-reply@rm-auth-tenant.local"
+)
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rm_auth_tenant.authentication.jwt_authentication.JWTAuthentication",
@@ -217,4 +256,27 @@ RM_AUTH = {
     "ENFORCER_CACHE_TTL_SECONDS": int(os.environ.get("RM_AUTH_ENFORCER_TTL", "300")),
     "DEFAULT_TENANT_ID": os.environ.get("RM_AUTH_DEFAULT_TENANT_ID", "default"),
     "DEFAULT_PERSONA_NAME": os.environ.get("RM_AUTH_DEFAULT_PERSONA_NAME", "Default"),
+    # --- Signup email verification (community edition) ---
+    # Feature-flagged and OFF by default -- local/dev signup stays
+    # frictionless (new users are active/verified immediately, same as
+    # today). Flip RM_AUTH_SIGNUP_EMAIL_VERIFICATION_ENABLED=true once this
+    # is going to production, so new signups must click the emailed link
+    # before they can log in (see SignupView / EmailVerificationService).
+    "SIGNUP_EMAIL_VERIFICATION_ENABLED": os.environ.get(
+        "RM_AUTH_SIGNUP_EMAIL_VERIFICATION_ENABLED", "false"
+    ).lower()
+    == "true",
+    # How long a verification link stays valid (django.core.signing's
+    # max_age -- see EmailVerificationService.verify). Default: 3 days.
+    "EMAIL_VERIFICATION_TTL_SECONDS": int(
+        os.environ.get("RM_AUTH_EMAIL_VERIFICATION_TTL", str(60 * 60 * 24 * 3))
+    ),
+    # `{token}` is substituted with the signed verification token. This
+    # should point at wherever the *frontend* handles verification (which
+    # then calls POST /api/rm_auth_tenant/verify-email with that token) --
+    # not at this API directly.
+    "EMAIL_VERIFICATION_URL": os.environ.get(
+        "RM_AUTH_EMAIL_VERIFICATION_URL",
+        "http://localhost:3000/verify-email?token={token}",
+    ),
 }

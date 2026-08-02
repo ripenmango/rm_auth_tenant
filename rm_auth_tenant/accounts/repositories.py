@@ -23,13 +23,47 @@ class AccountRepository:
         return User.objects.filter(tenant_id=tenant_id, is_active=True).order_by("username")
 
     def create_user(
-        self, tenant_id: str | None, username: str, password: str, email: str = ""
+        self,
+        tenant_id: str | None,
+        username: str,
+        password: str,
+        email: str = "",
+        is_active: bool = True,
+        is_email_verified: bool = True,
     ) -> User:
         """tenant_id=None falls back to the configured default tenant -- see
-        UserManager.create_user / default-tenant-and-persona.md."""
+        UserManager.create_user / default-tenant-and-persona.md.
+
+        is_active/is_email_verified default True (unchanged behavior for
+        every existing caller, e.g. POST /users). SignupView is the only
+        caller that ever passes both False -- when email verification is
+        enabled, a new signup starts inactive/unverified until it verifies
+        (see EmailVerificationService)."""
         return User.objects.create_user(
-            tenant_id=tenant_id, username=username, password=password, email=email
+            tenant_id=tenant_id,
+            username=username,
+            password=password,
+            email=email,
+            is_active=is_active,
+            is_email_verified=is_email_verified,
         )
+
+    def get_user_by_id_any_state(self, tenant_id: str, user_id: int) -> User | None:
+        """
+        Same as get_user_by_id, but WITHOUT the is_active=True filter --
+        needed for email verification, where the whole point of the lookup
+        is to find a user who is currently inactive pending verification.
+        Not for use anywhere a deactivated user shouldn't be resolvable
+        (e.g. login, admin CRUD) -- those must keep using get_user/
+        get_user_by_id.
+        """
+        return User.objects.filter(tenant_id=tenant_id, id=user_id).first()
+
+    def mark_email_verified(self, user: User) -> User:
+        user.is_email_verified = True
+        user.is_active = True
+        user.save(update_fields=["is_email_verified", "is_active"])
+        return user
 
     def update_user(self, user: User, **fields) -> User:
         for field, value in fields.items():

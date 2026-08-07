@@ -1,6 +1,6 @@
 from django.db import transaction
 
-from rm_auth_tenant.roles.models import Persona, Role, UserPersonaAssignment
+from rm_auth_tenant.roles.models import Persona, PersonaRole, Role, UserPersonaAssignment
 
 
 class RoleRepository:
@@ -32,8 +32,23 @@ class RoleRepository:
 
     def create_persona(self, tenant_id: str, name: str, roles: list[Role]) -> Persona:
         persona = Persona.objects.create(tenant_id=tenant_id, name=name)
-        persona.roles.set(roles)
+        # Not persona.roles.set(roles) -- that goes through Django's bulk M2M
+        # manager, which bulk_create()s the through rows and bypasses
+        # RMAuditModel.save() (same class of gotcha as the Casbin adapter's
+        # bulk_create issue), leaving created_by_id/updated_by_id NULL against
+        # a NOT NULL column. Creating each row explicitly runs save() normally.
+        for role in roles:
+            PersonaRole.objects.get_or_create(persona=persona, role=role)
         return persona
+
+    def add_role_to_persona(self, persona: Persona, role: Role) -> None:
+        """Bundles an additional Role into an ALREADY-EXISTING Persona --
+        unlike create_persona's roles=[...] (creation-time only), this is for
+        attaching a role to a persona that may already have users assigned
+        (e.g. RoleService._sync_default_persona_permissions topping up the
+        lazily-created default persona). get_or_create, same as
+        create_persona's loop above -- idempotent, safe to call repeatedly."""
+        PersonaRole.objects.get_or_create(persona=persona, role=role)
 
     def eligible_personas(self, tenant_id: str, user_id: int) -> list[Persona]:
         assignments = UserPersonaAssignment.objects.filter(

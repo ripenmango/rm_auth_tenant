@@ -21,12 +21,13 @@ Like create_role.py, this runs outside any HTTP request, so writes to
 RMAuditModel-backed tables (e.g. the persona assignment) are attributed to
 the "system" sentinel user unless --as-user is given.
 """
-from django.conf import settings
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.core.validators import validate_email
 
 from drf_base_app.audit.context import AuditContext
+from drf_base_app.tenancy.settings import get_default_tenant_id
 
 from rm_auth_tenant.accounts.repositories import AccountRepository
 from rm_auth_tenant.services.role_service import RoleService, RoleServiceError
@@ -41,8 +42,8 @@ class Command(BaseCommand):
             "--tenant",
             default=None,
             help="Tenant id the user belongs to. Omit to use the configured "
-                 "default tenant (see default-tenant-and-persona.md) -- it's "
-                 "auto-created if it doesn't exist yet.",
+            "default tenant (see default-tenant-and-persona.md) -- it's "
+            "auto-created if it doesn't exist yet.",
         )
         parser.add_argument("--username", required=True)
         parser.add_argument("--email", required=True)
@@ -53,42 +54,42 @@ class Command(BaseCommand):
             default=[],
             metavar="PERSONA_NAME",
             help="Existing persona name to assign (must already exist for --tenant, "
-                 "see create_role.py + RoleService.create_persona). Repeatable. "
-                 "Omit entirely to auto-assign the tenant's \"Default\" persona "
-                 "instead (auto-created if needed, zero permissions until an "
-                 "admin grants some) -- see default-tenant-and-persona.md.",
+            "see create_role.py + RoleService.create_persona). Repeatable. "
+            'Omit entirely to auto-assign the tenant\'s "Default" persona '
+            "instead (auto-created if needed, zero permissions until an "
+            "admin grants some) -- see default-tenant-and-persona.md.",
         )
         parser.add_argument(
             "--default-persona",
             default=None,
             metavar="PERSONA_NAME",
             help="Which of the assigned personas (from --persona, or the "
-                 "auto-assigned Default one) /login should use when the login "
-                 "request omits persona_id -- see "
-                 "UserPersonaAssignment.is_default / default-tenant-and-persona.md. "
-                 "Must be one of the personas actually being assigned. If omitted "
-                 "and only one persona is being assigned, that one becomes the "
-                 "default automatically; if omitted with several --persona flags, "
-                 "no default is set and /login will require an explicit persona_id "
-                 "until one is set later (see set_default_persona.py).",
+            "auto-assigned Default one) /login should use when the login "
+            "request omits persona_id -- see "
+            "UserPersonaAssignment.is_default / default-tenant-and-persona.md. "
+            "Must be one of the personas actually being assigned. If omitted "
+            "and only one persona is being assigned, that one becomes the "
+            "default automatically; if omitted with several --persona flags, "
+            "no default is set and /login will require an explicit persona_id "
+            "until one is set later (see set_default_persona.py).",
         )
         parser.add_argument(
             "--superuser",
             action="store_true",
             help="Also grant Django is_superuser/is_staff for /admin/ access -- "
-                 "independent of personas, see the Django-admin-vs-platform_admin "
-                 "distinction in auth-library-architecture.md. Use sparingly.",
+            "independent of personas, see the Django-admin-vs-platform_admin "
+            "distinction in auth-library-architecture.md. Use sparingly.",
         )
         parser.add_argument(
             "--as-user",
             default=None,
             metavar="USERNAME",
             help="Attribute the persona-assignment write to an existing user for "
-                 "--tenant, instead of the 'system' sentinel user.",
+            "--tenant, instead of the 'system' sentinel user.",
         )
 
     def handle(self, *args, **options):
-        tenant_id = options["tenant"] or settings.RM_AUTH.get("DEFAULT_TENANT_ID", "default")
+        tenant_id = options["tenant"] or get_default_tenant_id()
         username = options["username"]
         email = options["email"]
         password = options["password"]
@@ -102,7 +103,7 @@ class Command(BaseCommand):
             raise CommandError(f"--email {email!r} is not a valid email address.")
 
         if not Tenant.objects.filter(id=tenant_id).exists():
-            if tenant_id == settings.RM_AUTH.get("DEFAULT_TENANT_ID", "default"):
+            if tenant_id == get_default_tenant_id():
                 # Auto-create the default tenant lazily -- normally provisioned
                 # by the 0003_seed_default_tenant migration already, but this
                 # covers a settings override that changed the id after migrate.
@@ -117,20 +118,26 @@ class Command(BaseCommand):
 
         accounts = AccountRepository()
         if accounts.get_user(tenant_id, username) is not None:
-            raise CommandError(f"User {username!r} already exists for tenant {tenant_id!r}")
+            raise CommandError(
+                f"User {username!r} already exists for tenant {tenant_id!r}"
+            )
 
         actor_user_id = None
         if as_username:
             actor = accounts.get_user(tenant_id, as_username)
             if actor is None:
-                raise CommandError(f"No user {as_username!r} found for tenant {tenant_id!r}")
+                raise CommandError(
+                    f"No user {as_username!r} found for tenant {tenant_id!r}"
+                )
             actor_user_id = actor.id
 
         role_service = RoleService()
         resolved_personas = []
         for persona_name in persona_names:
             try:
-                resolved_personas.append(role_service.get_persona_by_name(tenant_id, persona_name))
+                resolved_personas.append(
+                    role_service.get_persona_by_name(tenant_id, persona_name)
+                )
             except RoleServiceError as exc:
                 raise CommandError(str(exc))
 
@@ -155,7 +162,9 @@ class Command(BaseCommand):
         elif used_default_persona or len(resolved_personas) == 1:
             resolved_default = resolved_personas[0]
         else:
-            resolved_default = None  # multiple personas, no default -- login requires persona_id
+            resolved_default = (
+                None  # multiple personas, no default -- login requires persona_id
+            )
 
         # User creation itself isn't an RMAuditModel write (User has no
         # created_by/updated_by -- see accounts/models.py), so --as-user only
@@ -169,7 +178,10 @@ class Command(BaseCommand):
         def _assign_personas():
             for persona in resolved_personas:
                 role_service.assign_persona(
-                    tenant_id, user.id, persona, is_default=(persona == resolved_default)
+                    tenant_id,
+                    user.id,
+                    persona,
+                    is_default=(persona == resolved_default),
                 )
 
         if actor_user_id is not None:

@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 
-from django.conf import settings
 from django.db import transaction
 
 from rm_auth_tenant.accounts.models import User
@@ -13,6 +12,7 @@ from rm_auth_tenant.policy.service import PolicyService
 from rm_auth_tenant.roles.models import Persona
 from rm_auth_tenant.roles.repositories import RoleRepository
 from rm_auth.tenants.repositories import TenantRepository
+from rm_auth_tenant.conf import rm_auth_tenant_settings
 
 
 class AuthenticationError(Exception):
@@ -49,7 +49,13 @@ class AuthenticationService:
 
     # -- login -----------------------------------------------------------
 
-    def login(self, tenant_id: str, username: str, password: str, persona_id: int | None = None):
+    def login(
+        self,
+        tenant_id: str,
+        username: str,
+        password: str,
+        persona_id: int | None = None,
+    ):
         user = self.accounts.get_user(tenant_id, username)
         if user is None or not self.accounts.verify_password(user, password):
             self.audit.record_login_attempt(tenant_id, username, success=False)
@@ -63,7 +69,11 @@ class AuthenticationService:
         token_pair = self._issue_and_record(user, tenant_id, persona)
 
         self.audit.record_login_attempt(
-            tenant_id, username, success=True, persona_id=persona.id, jti=token_pair.access_jti
+            tenant_id,
+            username,
+            success=True,
+            persona_id=persona.id,
+            jti=token_pair.access_jti,
         )
         return token_pair, persona
 
@@ -94,9 +104,11 @@ class AuthenticationService:
     def _issue_and_record(self, user: User, tenant_id: str, persona: Persona):
         tenant = self.tenants.get_or_default(tenant_id)
         key = resolve_signing_key(tenant)
-        token_pair = issuer.issue_token_pair(user.id, tenant_id, persona.id, user.ver, key)
+        token_pair = issuer.issue_token_pair(
+            user.id, tenant_id, persona.id, user.ver, key
+        )
 
-        refresh_ttl = settings.RM_AUTH.get("JWT_REFRESH_TTL_SECONDS", 60 * 60 * 24 * 7)
+        refresh_ttl = rm_auth_tenant_settings.jwt_refresh_ttl_seconds
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=refresh_ttl)
         self.refresh_store.record(
             token_pair.refresh_jti, tenant_id, user.id, persona.id, user.ver, expires_at
@@ -123,7 +135,10 @@ class AuthenticationService:
 
         token_pair = self._issue_and_record(user, tenant_id, persona)
         self.audit.record_event(
-            tenant_id, "persona_switched", user_id=user_id, metadata={"persona_id": persona.id}
+            tenant_id,
+            "persona_switched",
+            user_id=user_id,
+            metadata={"persona_id": persona.id},
         )
         return token_pair, persona
 
@@ -165,24 +180,33 @@ class AuthenticationService:
 
         token_pair = self._issue_and_record(user, decoded.tenant_id, persona)
         self.audit.record_event(
-            decoded.tenant_id, "token_refreshed", user_id=user.id, metadata={"jti": token_pair.access_jti}
+            decoded.tenant_id,
+            "token_refreshed",
+            user_id=user.id,
+            metadata={"jti": token_pair.access_jti},
         )
         return token_pair, persona
 
     # -- logout / change_password -----------------------------------------
 
-    def logout(self, tenant_id: str, user_id: int, refresh_jti: str | None = None) -> None:
+    def logout(
+        self, tenant_id: str, user_id: int, refresh_jti: str | None = None
+    ) -> None:
         if refresh_jti:
             self.refresh_store.revoke(refresh_jti)
         self.audit.record_event(tenant_id, "logout", user_id=user_id)
 
     @transaction.atomic
-    def change_password(self, tenant_id: str, user_id: int, old_password: str, new_password: str) -> None:
+    def change_password(
+        self, tenant_id: str, user_id: int, old_password: str, new_password: str
+    ) -> None:
         user = self.accounts.get_user_by_id(tenant_id, user_id)
         if user is None or not self.accounts.verify_password(user, old_password):
             raise AuthenticationError("Old password is incorrect")
         if self.accounts.was_previously_used(user, new_password):
-            raise AuthenticationError("Password was used recently; choose a different one")
+            raise AuthenticationError(
+                "Password was used recently; choose a different one"
+            )
 
         self.accounts.set_password(user, new_password)
         self.accounts.bump_version(user)  # invalidates every outstanding token (§7)

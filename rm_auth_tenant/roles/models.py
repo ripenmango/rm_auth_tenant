@@ -28,6 +28,37 @@ class Role(RMAuditModel, RMSluggedModel):
         return f"{self.tenant_id}:{self.name}"
 
 
+class PersonaRole(RMAuditModel):
+    """
+    Explicit through table for Persona.roles -- replaces what would
+    otherwise be Django's implicit `rm_auth_tenant_persona_roles` M2M
+    table. Kept explicit (rather than an implicit ManyToManyField) so a
+    later need to record e.g. who granted a role to a persona and when
+    doesn't require migrating off an implicit M2M table.
+
+    No extra required fields beyond the two FKs, so existing callers like
+    RoleRepository.create_persona's `persona.roles.set(roles)` keep working
+    unchanged -- Django allows .set()/.add()/.remove() through an explicit
+    `through` model as long as it has no additional required fields.
+    """
+
+    persona = models.ForeignKey(
+        "Persona", on_delete=dj_models.CASCADE, related_name="persona_roles"
+    )
+    role = models.ForeignKey(
+        Role, on_delete=dj_models.CASCADE, related_name="role_personas"
+    )
+
+    class Meta:
+        app_label = "rm_auth_tenant"
+        db_table = "rm_auth_persona_role"
+        constraints = [
+            dj_models.UniqueConstraint(
+                fields=["persona", "role"], name="uniq_persona_role"
+            )
+        ]
+
+
 class Persona(RMAuditModel, RMSluggedModel):
     """
     A named bundle of Roles representing "how a user is acting" (§5). A user
@@ -37,7 +68,9 @@ class Persona(RMAuditModel, RMSluggedModel):
 
     tenant_id = models.CharField(max_length=64, db_index=True)
     name = models.CharField(max_length=100)
-    roles = models.ManyToManyField(Role, related_name="personas", blank=True)
+    roles = models.ManyToManyField(
+        Role, through=PersonaRole, related_name="personas", blank=True
+    )
     # Tenant-scoped, not globally unique -- see uniq_persona_tenant_slug below.
     slug = models.SlugField(max_length=255, unique=False, blank=True)
 

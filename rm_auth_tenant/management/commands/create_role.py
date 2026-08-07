@@ -18,10 +18,11 @@ specific real admin instead.
 --tenant is optional -- omit it to create the role in the configured
 default tenant (see default-tenant-and-persona.md), auto-created if needed.
 """
-from django.conf import settings
+
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from drf_base_app.audit.context import AuditContext
+from drf_base_app.tenancy.settings import get_default_tenant_id
 
 from rm_auth_tenant.accounts.repositories import AccountRepository
 from rm_auth_tenant.services.role_service import RoleService, RoleServiceError
@@ -29,16 +30,20 @@ from rm_auth.tenants.models import Tenant
 
 
 class Command(BaseCommand):
-    help = "Creates a Role for a tenant, optionally granting it permissions immediately."
+    help = (
+        "Creates a Role for a tenant, optionally granting it permissions immediately."
+    )
 
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--tenant",
             default=None,
             help="Tenant id the role belongs to. Omit to use the configured "
-                 "default tenant -- see default-tenant-and-persona.md.",
+            "default tenant -- see default-tenant-and-persona.md.",
         )
-        parser.add_argument("--name", required=True, help="Role name (unique per tenant)")
+        parser.add_argument(
+            "--name", required=True, help="Role name (unique per tenant)"
+        )
         parser.add_argument("--description", default="", help="Optional description")
         parser.add_argument(
             "--grant",
@@ -52,18 +57,18 @@ class Command(BaseCommand):
             default=None,
             metavar="USERNAME",
             help="Attribute this write to an existing user for --tenant, instead of "
-                 "the 'system' sentinel user.",
+            "the 'system' sentinel user.",
         )
 
     def handle(self, *args, **options):
-        tenant_id = options["tenant"] or settings.RM_AUTH.get("DEFAULT_TENANT_ID", "default")
+        tenant_id = options["tenant"] or get_default_tenant_id()
         name = options["name"]
         description = options["description"]
         grants = options["grant"]
         as_username = options["as_user"]
 
         if not Tenant.objects.filter(id=tenant_id).exists():
-            if tenant_id == settings.RM_AUTH.get("DEFAULT_TENANT_ID", "default"):
+            if tenant_id == get_default_tenant_id():
                 Tenant.objects.get_or_create(
                     id=tenant_id, defaults={"name": tenant_id, "jwt_algorithm": "HS256"}
                 )
@@ -77,7 +82,9 @@ class Command(BaseCommand):
         if as_username:
             user = AccountRepository().get_user(tenant_id, as_username)
             if user is None:
-                raise CommandError(f"No user {as_username!r} found for tenant {tenant_id!r}")
+                raise CommandError(
+                    f"No user {as_username!r} found for tenant {tenant_id!r}"
+                )
             actor_user_id = user.id
 
         parsed_grants: list[tuple[str, str]] = []
@@ -92,10 +99,14 @@ class Command(BaseCommand):
         def _create():
             try:
                 role = service.create_role(tenant_id, name, description)
-            except Exception as exc:  # surfaces IntegrityError (duplicate name) etc. plainly
+            except (
+                Exception
+            ) as exc:  # surfaces IntegrityError (duplicate name) etc. plainly
                 raise CommandError(f"Could not create role {name!r}: {exc}") from exc
             for resource, action in parsed_grants:
-                service.grant_permission(tenant_id, role, resource=resource, action=action)
+                service.grant_permission(
+                    tenant_id, role, resource=resource, action=action
+                )
             return role
 
         if actor_user_id is not None:
@@ -109,6 +120,8 @@ class Command(BaseCommand):
             if parsed_grants
             else " (no permissions granted -- role has no effect until you grant some)"
         )
-        self.stdout.write(self.style.SUCCESS(
-            f"Created role {role.name!r} (id={role.id}) for tenant {tenant_id!r}{grant_summary}"
-        ))
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Created role {role.name!r} (id={role.id}) for tenant {tenant_id!r}{grant_summary}"
+            )
+        )

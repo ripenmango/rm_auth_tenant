@@ -1,9 +1,9 @@
-from django.conf import settings
 from django.db import IntegrityError
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed, NotFound, ValidationError
 
 from drf_base_app.rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
 from drf_base_app.views import (
     RMAPIView,
     RMModelViewSet,
@@ -51,6 +51,7 @@ from rm_auth_tenant.services.email_verification_service import (
 from rm_auth_tenant.services.role_service import RoleService, RoleServiceError
 from rm_auth_tenant.services.user_service import UserService, UserServiceError
 from drf_base_app.logging import get_logger
+from rm_auth_tenant.conf import rm_auth_tenant_settings
 
 logger = get_logger(__name__)
 
@@ -68,11 +69,16 @@ def _resolve_tenant_id(data: dict) -> str:
     default-tenant-and-persona.md. `tenant` is optional on Login/Refresh; if
     omitted, callers land in the configured default tenant rather than
     needing to know or supply a tenant id at all."""
-    return data.get("tenant") or settings.RM_AUTH.get("DEFAULT_TENANT_ID", "default")
+    return data.get("tenant") or rm_auth_tenant_settings.default_tenant_id
 
 
 class LoginView(RMAPIView):
     """POST /api/auth/login -- §14.1 sequence diagram."""
+
+    is_public = True
+    permission_classes = [
+        AllowAny
+    ]  # no credentials exist yet -- this IS how you get them
 
     @rm_swagger(
         summary="Authenticate a user and issue a token pair",
@@ -130,6 +136,11 @@ class LoginView(RMAPIView):
 
 class RefreshView(RMAPIView):
     """POST /api/auth/refresh -- §14.3 sequence diagram."""
+
+    is_public = True
+    permission_classes = [
+        AllowAny
+    ]  # exchanges a refresh token for a new pair -- no access token to authenticate with yet
 
     @rm_swagger(
         summary="Exchange a refresh token for a new token pair",
@@ -289,8 +300,7 @@ class SignupView(RMAPIView):
     POST /api/rm_auth_tenant/signup -- public, unauthenticated self-
     registration for the community edition (a user needs an account
     before they have any credentials to call the permissioned POST
-    /users endpoint with). Uses RMAPIView's default `AllowAny` --
-    deliberately not overridden, same as Login/Refresh above.
+    /users endpoint with).
 
     Thin wrapper around the exact same UserService.create_user() that
     UserViewSet.create uses, just with a public-signup-shaped input:
@@ -301,6 +311,9 @@ class SignupView(RMAPIView):
     persona_ids -> the tenant's lazily-created "Default" persona -- see
     default-tenant-and-persona.md).
     """
+
+    is_public = True
+    permission_classes = [AllowAny]
 
     @rm_swagger(
         summary="Self-register a new user (community edition signup)",
@@ -381,12 +394,12 @@ class SignupView(RMAPIView):
                 is_email_verified=not verification_enabled,
             )
         except IntegrityError:
-            raise ValidationError(
-                "A user with this email or username already exists."
-            )
+            raise ValidationError("A user with this email or username already exists.")
 
         audit = AuditService()
-        audit.record_event(tenant_id, "user_signed_up", user_id=user.id, metadata={"email": user.email})
+        audit.record_event(
+            tenant_id, "user_signed_up", user_id=user.id, metadata={"email": user.email}
+        )
 
         if verification_enabled:
             EmailVerificationService().send_verification_email(tenant_id, user)
@@ -412,6 +425,9 @@ class VerifyEmailView(RMAPIView):
     in their inbox.
     """
 
+    is_public = True
+    permission_classes = [AllowAny]
+
     @rm_swagger(
         summary="Verify a signup email address",
         description=(
@@ -422,7 +438,9 @@ class VerifyEmailView(RMAPIView):
         request=VerifyEmailSerializer,
         success=UserSerializer,
         responses={
-            400: error_response("Verification link is invalid, expired, or its user no longer exists.")
+            400: error_response(
+                "Verification link is invalid, expired, or its user no longer exists."
+            )
         },
         tags=["Users"],
     )

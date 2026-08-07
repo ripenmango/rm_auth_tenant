@@ -1,5 +1,6 @@
-from django.conf import settings
 from django.db import transaction
+
+from drf_base_app.tenancy.settings import get_default_persona_name
 
 from rm_auth_tenant.audit.service import AuditService
 from rm_auth_tenant.permissions.repositories import PermissionRepository
@@ -7,6 +8,7 @@ from rm_auth_tenant.policy.models import RoleAssignment
 from rm_auth_tenant.policy.service import PolicyService
 from rm_auth_tenant.roles.models import Persona, Role
 from rm_auth_tenant.roles.repositories import RoleRepository
+from rm_auth_tenant.conf import rm_auth_tenant_settings
 
 
 class RoleServiceError(Exception):
@@ -58,22 +60,28 @@ class RoleService:
         return roles
 
     @transaction.atomic
-    def grant_permission(self, tenant_id: str, role: Role, resource: str, action: str) -> None:
+    def grant_permission(
+        self, tenant_id: str, role: Role, resource: str, action: str
+    ) -> None:
         self.permissions.grant(tenant_id, role, resource, action)
         # Casbin subject is the role's SLUG, not .name -- slug is set once at
         # creation and never recomputed (see RMSluggedModel), so a later rename
         # of the role doesn't orphan this policy row the way .name would.
         self.policy.grant(tenant_id, role.slug, resource, action)
         self.audit.record_event(
-            tenant_id, "permission_granted",
+            tenant_id,
+            "permission_granted",
             metadata={"role": role.name, "resource": resource, "action": action},
         )
 
     @transaction.atomic
-    def revoke_permission(self, tenant_id: str, role: Role, resource: str, action: str) -> None:
+    def revoke_permission(
+        self, tenant_id: str, role: Role, resource: str, action: str
+    ) -> None:
         self.policy.revoke(tenant_id, role.slug, resource, action)
         self.audit.record_event(
-            tenant_id, "permission_revoked",
+            tenant_id,
+            "permission_revoked",
             metadata={"role": role.name, "resource": resource, "action": action},
         )
 
@@ -87,12 +95,15 @@ class RoleService:
         # resolves transitively through Casbin's own role manager.
         for role in roles:
             self.policy.assign_role_to_subject(
-                tenant_id, persona.slug, role.slug,
+                tenant_id,
+                persona.slug,
+                role.slug,
                 subject_type=RoleAssignment.SUBJECT_TYPE_PERSONA,
                 group_type=RoleAssignment.GROUP_TYPE_ROLE,
             )
         self.audit.record_event(
-            tenant_id, "persona_created",
+            tenant_id,
+            "persona_created",
             metadata={"persona": persona.name, "roles": [r.name for r in roles]},
         )
         return persona
@@ -117,9 +128,15 @@ class RoleService:
         Every tenant (including the configured default tenant -- see
         default-tenant-and-persona.md) lazily gets its own Persona with this
         name on first use, rather than requiring one to be pre-provisioned
-        per tenant. Starts with ZERO bundled roles (zero real permissions)
-        until an admin explicitly grants some -- a safe, no-privilege
-        starting point, not an implicit admin/superuser shortcut.
+        per tenant.
+
+        Bundles whatever rm_auth_tenant_settings.default_persona_permissions says
+        (empty by default, matching the original "safe, no-privilege starting
+        point" behavior) -- see _sync_default_persona_permissions below. A
+        consuming project that wants its community/self-serve users to get
+        real permissions out of the box (e.g. CRUD on their own
+        workspaces/workflows) sets that list explicitly; nothing here invents
+        a permission set on its own.
 
         Called by UserService.create_user (and the create_user.py CLI
         command) whenever a new user isn't given an explicit persona, so
@@ -128,11 +145,78 @@ class RoleService:
         login without needing `persona_id` in the request (exactly one
         eligible persona -> auto-selected, no code change needed there).
         """
-        name = settings.RM_AUTH.get("DEFAULT_PERSONA_NAME", "Default")
-        existing = self.roles.get_persona(tenant_id, name)
-        if existing:
-            return existing
-        return self.create_persona(tenant_id, name, roles=[])
+        name = rm_auth_tenant_settings.default_persona_name
+        persona = self.roles.get_persona(tenant_id, name)
+        if persona is None:
+            persona = self.create_persona(tenant_id, name, roles=[])
+        self._sync_default_persona_permissions(tenant_id, persona)
+        return persona
+
+    @transaction.atomic
+    def _sync_default_persona_permissions(
+        self, tenant_id: str, persona: Persona
+    ) -> None:
+        """
+        Tops up the default persona's bundled role so it always matches
+        settings.RM_AUTH["DEFAULT_PERSONA_PERMISSIONS"] -- runs every time
+        get_or_create_default_persona is called (i.e. every signup), via the
+        exact same grant_permission/create_role/create_persona API calls
+        seed_roles.py uses, never a management command or direct model write.
+
+        Extensible by design: add a (resource, action) tuple to that setting
+        and it's granted immediately -- not just to new signups, but to every
+        user already on this persona too, with no backfill/migration step.
+        That's possible because the grant lands on a role shared by the whole
+        persona, and Casbin evaluates permissions per-persona (via the
+        g(user, persona) + g(persona, role) + p(role, ...) chain -- see
+        create_persona's docstring), not per-user.
+
+        Diffs against the role's current permissions first so an
+        already-synced persona (the common case, every signup after the
+        first) costs one read and no writes -- grant_permission's
+        PolicyService.grant() busts the tenant's Casbin enforcer cache on
+        every call, which isn't worth paying on every signup once nothing is
+        actually changing.
+        """
+        default_perms = rm_auth_tenant_settings.default_persona_permissions
+        if not default_perms:
+            return
+
+        role_name = f"{persona.name} (auto-granted)"
+        role = self.roles.get_role(tenant_id, role_name)
+        if role is None:
+            role = self.create_role(
+                tenant_id,
+                role_name,
+                description=(
+                    "Auto-managed -- backs the default persona's auto-granted "
+                    "permissions (settings.RM_AUTH['DEFAULT_PERSONA_PERMISSIONS']). "
+                    "Adjust that setting rather than editing this role directly; "
+                    "use revoke_permission for a one-off removal."
+                ),
+            )
+
+        already_granted = {
+            (p.resource.name, p.action.name)
+            for p in self.permissions.for_roles(tenant_id, [role])
+        }
+        for resource, action in default_perms:
+            if (resource, action) not in already_granted:
+                self.grant_permission(tenant_id, role, resource, action)
+
+        if not persona.roles.filter(pk=role.pk).exists():
+            self.roles.add_role_to_persona(persona, role)
+            # Same Casbin g(persona.slug, role.slug) wiring create_persona
+            # does for roles passed at creation time -- without this, the
+            # PersonaRole row is Django-only bookkeeping and grants nothing
+            # (see create_persona's docstring).
+            self.policy.assign_role_to_subject(
+                tenant_id,
+                persona.slug,
+                role.slug,
+                subject_type=RoleAssignment.SUBJECT_TYPE_PERSONA,
+                group_type=RoleAssignment.GROUP_TYPE_ROLE,
+            )
 
     @transaction.atomic
     def assign_persona(
@@ -147,12 +231,16 @@ class RoleService:
         # meaning to Casbin's enforce() at all. See UserPersonaAssignment's
         # docstring for why it lives only in the Django-side table.
         self.policy.assign_role_to_subject(
-            tenant_id, str(user_id), persona.slug,
+            tenant_id,
+            str(user_id),
+            persona.slug,
             subject_type=RoleAssignment.SUBJECT_TYPE_USER,
             group_type=RoleAssignment.GROUP_TYPE_PERSONA,
         )
         self.audit.record_event(
-            tenant_id, "role_assigned", user_id=user_id,
+            tenant_id,
+            "role_assigned",
+            user_id=user_id,
             metadata={"persona": persona.name, "is_default": is_default},
         )
 
@@ -164,7 +252,9 @@ class RoleService:
         return self.roles.get_default_persona(tenant_id, user_id)
 
     @transaction.atomic
-    def set_default_persona(self, tenant_id: str, user_id: int, persona: Persona) -> None:
+    def set_default_persona(
+        self, tenant_id: str, user_id: int, persona: Persona
+    ) -> None:
         """Marks an ALREADY-assigned persona as the user's default, without
         re-assigning it -- e.g. for fixing up a user who already has several
         personas and no default set. Raises if the persona isn't assigned to
@@ -176,7 +266,9 @@ class RoleService:
                 f"'{tenant_id}' -- assign it first (RoleService.assign_persona)."
             )
         self.audit.record_event(
-            tenant_id, "default_persona_set", user_id=user_id,
+            tenant_id,
+            "default_persona_set",
+            user_id=user_id,
             metadata={"persona": persona.name},
         )
 
@@ -185,7 +277,10 @@ class RoleService:
         self.roles.revoke_persona(tenant_id, user_id, persona)
         self.policy.revoke_role_from_subject(tenant_id, str(user_id), persona.slug)
         self.audit.record_event(
-            tenant_id, "role_revoked", user_id=user_id, metadata={"persona": persona.name}
+            tenant_id,
+            "role_revoked",
+            user_id=user_id,
+            metadata={"persona": persona.name},
         )
 
     def eligible_personas(self, tenant_id: str, user_id: int) -> list[Persona]:

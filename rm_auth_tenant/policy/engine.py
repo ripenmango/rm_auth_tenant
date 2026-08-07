@@ -16,25 +16,26 @@ Two invalidation paths, matching the design doc:
     so *other* processes drop their cached enforcer too -- wire that publish
     call in here once the pub/sub transport is chosen (see design doc §13).
 """
+
 import threading
 import time
 
 import casbin
-
-from django.conf import settings
-
 from rm_auth_tenant.policy.adapters import TenantScopedPolicyAdapter
+from rm_auth_tenant.conf import rm_auth_tenant_settings
 
 _lock = threading.Lock()
-_cache: dict[str, tuple[casbin.Enforcer, float]] = {}  # tenant_id -> (enforcer, expires_at)
+_cache: dict[
+    str, tuple[casbin.Enforcer, float]
+] = {}  # tenant_id -> (enforcer, expires_at)
 
 
 def _ttl_seconds() -> int:
-    return settings.RM_AUTH.get("ENFORCER_CACHE_TTL_SECONDS", 300)
+    return rm_auth_tenant_settings.enforcer_cache_ttl_seconds
 
 
 def _model_path() -> str:
-    return settings.RM_AUTH.get("CASBIN_MODEL_PATH")
+    return rm_auth_tenant_settings.casbin_model_path
 
 
 def _build_enforcer(tenant_id: str) -> casbin.Enforcer:

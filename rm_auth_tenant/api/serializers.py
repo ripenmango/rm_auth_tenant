@@ -67,7 +67,7 @@ class UserSerializer(serializers.RMSerializer):
 
 class CreateUserSerializer(serializers.RMSerializer):
     username = serializers.CharField()
-    email = serializers.EmailField(required=False, default="")
+    email = serializers.EmailField(required=False, default="", allow_blank=True)
     password = serializers.CharField(write_only=True)
     # Both optional -- omit entirely and the tenant's lazily-created "Default"
     # persona is assigned automatically (see UserService.create_user /
@@ -146,7 +146,7 @@ class RoleSerializer(serializers.RMSerializer):
 
 class CreateRoleSerializer(serializers.RMSerializer):
     name = serializers.CharField()
-    description = serializers.CharField(required=False, default="")
+    description = serializers.CharField(required=False, default="", allow_blank=True)
 
 
 class PersonaDetailSerializer(serializers.RMSerializer):

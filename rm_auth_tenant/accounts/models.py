@@ -5,8 +5,8 @@ from drf_base_app.models.base import (
     RMSluggedModel,
     BaseUserManager,
 )
-from django.conf import settings
 from django.db import models as dj_models
+from rm_auth_tenant.conf import rm_auth_tenant_settings
 
 
 class UserManager(BaseUserManager):
@@ -30,7 +30,7 @@ class UserManager(BaseUserManager):
             # default-tenant-and-persona.md. A caller that doesn't know or
             # care about tenants (or a future public signup flow) lands in
             # this single shared tenant rather than being forced to invent one.
-            tenant_id = settings.RM_AUTH.get("DEFAULT_TENANT_ID", "default")
+            tenant_id = rm_auth_tenant_settings.default_tenant_id
         if not username:
             raise ValueError("username is required")
         user = self.model(tenant_id=tenant_id, username=username, **extra_fields)

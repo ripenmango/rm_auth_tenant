@@ -14,9 +14,10 @@ rm_auth/migrations/0002_seed_default_tenant.py -- since Tenant no longer
 requires a User to exist first (it dropped RMAuditModel's created_by/
 updated_by entirely, see that doc's section 0.2).
 """
-from django.conf import settings
+
 from django.contrib.auth.hashers import make_password
 from django.db import migrations
+from rm_auth_tenant.conf import rm_auth_tenant_settings
 
 SYSTEM_TENANT_ID = "__system__"  # reserved pseudo-tenant for the system user itself
 
@@ -24,7 +25,7 @@ SYSTEM_TENANT_ID = "__system__"  # reserved pseudo-tenant for the system user it
 def seed_system_user(apps, schema_editor):
     User = apps.get_model("rm_auth_tenant", "User")
 
-    system_username = getattr(settings, "AUDIT_SYSTEM_USERNAME", "system")
+    system_username = rm_auth_tenant_settings.audit_system_username
     if User.objects.filter(username=system_username).exists():
         return
 
@@ -46,7 +47,7 @@ def seed_system_user(apps, schema_editor):
 
 def unseed_system_user(apps, schema_editor):
     User = apps.get_model("rm_auth_tenant", "User")
-    system_username = getattr(settings, "AUDIT_SYSTEM_USERNAME", "system")
+    system_username = rm_auth_tenant_settings.audit_system_username
     User.objects.filter(username=system_username, tenant_id=SYSTEM_TENANT_ID).delete()
 
 

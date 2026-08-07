@@ -9,8 +9,7 @@ secret path or secrets-manager call directly.
 """
 
 from dataclasses import dataclass
-
-from django.conf import settings
+from rm_auth_tenant.conf import rm_auth_tenant_settings
 
 
 @dataclass(frozen=True)
@@ -41,10 +40,8 @@ def resolve_signing_key(tenant) -> ResolvedKey:
     tenant. Falls back to the global HS256 default when the tenant has no
     record yet or is explicitly configured for HS256 (Tier A default).
     """
-    default_algorithm = settings.RM_AUTH.get("DEFAULT_ALGORITHM", "HS256")
-
     if tenant is None or tenant.jwt_algorithm == "HS256":
-        secret = settings.RM_AUTH.get("DEFAULT_SIGNING_SECRET")
+        secret = rm_auth_tenant_settings.signing_secret
         return ResolvedKey(algorithm="HS256", signing_key=secret, verifying_key=secret)
 
     if tenant.jwt_algorithm == "RS256":

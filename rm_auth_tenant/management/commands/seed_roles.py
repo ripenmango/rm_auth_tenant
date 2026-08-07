@@ -1,12 +1,13 @@
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 
+from drf_base_app.tenancy.settings import get_default_tenant_id
 from rm_auth_tenant.accounts.repositories import AccountRepository
 from rm_auth_tenant.services.role_service import RoleService
 from rm_auth.tenants.models import Domain, Tenant
+from rm_auth_tenant.conf import rm_auth_tenant_settings
 
 
 class Command(BaseCommand):
@@ -39,15 +40,15 @@ class Command(BaseCommand):
             "--tenant",
             default=None,
             help="Tenant id to seed. Omit to use the configured default tenant "
-            "(settings.RM_AUTH['DEFAULT_TENANT_ID'], normally 'default' -- "
+            "(settings.RM_AUTH['DEFAULT_TENANT_ID'], normally 'rm_community' -- "
             "see default-tenant-and-persona.md) rather than inventing a "
             "separate one; only pass this explicitly for a real, distinct "
             "(e.g. enterprise) tenant.",
         )
         parser.add_argument(
             "--admin-username",
-            default="rm_administrator",
-            help="Username for the seeded admin user (default: rm_administrator -- "
+            default="rm_admin",
+            help="Username for the seeded admin user (default: rm_admin -- "
             "avoid 'admin', it's a common brute-force target and easy to "
             "confuse with Django's own superuser convention)",
         )
@@ -75,9 +76,7 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
-        tenant_id = options["tenant"] or settings.RM_AUTH.get(
-            "DEFAULT_TENANT_ID", "default"
-        )
+        tenant_id = options["tenant"] or rm_auth_tenant_settings.default_tenant_id
         admin_username = options["admin_username"]
         admin_email = options["admin_email"]
         admin_password = options["admin_password"]

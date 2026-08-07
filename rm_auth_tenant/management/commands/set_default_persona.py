@@ -13,8 +13,9 @@ Typical use: fixing up a user who ended up with several personas and no
 default set (e.g. from seed_roles --with-demo-persona, or any user created
 before this feature existed).
 """
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError, CommandParser
+
+from drf_base_app.tenancy.settings import get_default_tenant_id
 
 from rm_auth_tenant.accounts.repositories import AccountRepository
 from rm_auth_tenant.services.role_service import RoleService, RoleServiceError
@@ -39,7 +40,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        tenant_id = options["tenant"] or settings.RM_AUTH.get("DEFAULT_TENANT_ID", "default")
+        tenant_id = options["tenant"] or get_default_tenant_id()
         username = options["username"]
         persona_name = options["persona"]
 

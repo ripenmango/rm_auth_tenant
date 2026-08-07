@@ -20,3 +20,10 @@ class RmAuthTenantConfig(AppConfig):
     name = "rm_auth_tenant"
     label = "rm_auth_tenant"
     verbose_name = "RM Auth Tenant"
+
+    def ready(self):
+        # Registers check_every_view_declares_access (Layer 3 of the
+        # permission_classes safeguard -- see authorization/DESIGN.md and
+        # checks.py) -- importing the module is what runs its @register()
+        # decorator; this import has no other purpose.
+        from rm_auth_tenant import checks  # noqa: F401

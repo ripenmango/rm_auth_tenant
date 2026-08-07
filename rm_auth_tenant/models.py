@@ -19,6 +19,7 @@ everything and gives callers a convenient
 """
 from rm_auth_tenant.accounts.models import PasswordHistory, User
 from rm_auth_tenant.audit.models import LoginAttempt, SecurityEvent
+from rm_auth_tenant.authorization.entity_access_models import EntityAccessGrant
 from rm_auth_tenant.jwt_auth.models import RefreshTokenRecord
 from rm_auth_tenant.permissions.models import Permission, Resource
 from rm_auth_tenant.policy.models import PolicyRule, RoleAssignment
@@ -37,4 +38,5 @@ __all__ = [
     "RefreshTokenRecord",
     "LoginAttempt",
     "SecurityEvent",
+    "EntityAccessGrant",
 ]

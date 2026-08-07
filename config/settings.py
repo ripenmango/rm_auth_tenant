@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 
 from drf_base_app.logging.config import setup as configure_logging
+from drf_base_app.tenancy.settings import get_default_persona_name, get_default_tenant_id
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -254,8 +255,59 @@ RM_AUTH = {
         BASE_DIR / "rm_auth_tenant" / "policy" / "casbin_model.conf"
     ),
     "ENFORCER_CACHE_TTL_SECONDS": int(os.environ.get("RM_AUTH_ENFORCER_TTL", "300")),
-    "DEFAULT_TENANT_ID": os.environ.get("RM_AUTH_DEFAULT_TENANT_ID", "default"),
-    "DEFAULT_PERSONA_NAME": os.environ.get("RM_AUTH_DEFAULT_PERSONA_NAME", "Default"),
+    "DEFAULT_TENANT_ID": get_default_tenant_id(),
+    "DEFAULT_PERSONA_NAME": get_default_persona_name(),
+    # --- Auto-granted permissions for the default persona (community edition) ---
+    # Every (resource, action) pair here is granted to the default tenant's
+    # lazily-created default persona ("tenant-administrator" in rm_community
+    # by default) -- see RoleService.get_or_create_default_persona /
+    # RoleService._sync_default_persona_permissions. Applied via the same
+    # RoleService.grant_permission API seed_roles.py uses -- not a management
+    # command -- so it runs automatically on every signup/user-creation call
+    # that lands a user on the default persona.
+    #
+    # Extensible: add a tuple here and it's granted immediately to every
+    # existing AND future default-persona user -- no backfill needed, since
+    # the grant lands on the shared role the persona bundles, and Casbin
+    # evaluates permissions per-persona, not per-user.
+    #
+    # NOTE: these grants are tenant-wide at the Casbin layer (Casbin has no
+    # per-object "own records only" concept -- see casbin_model.conf's
+    # matcher). "manage" here is only the coarse, type-level gate checked by
+    # RequiresPermission.has_permission ("can this persona reach this
+    # endpoint AT ALL") -- it is NOT tenant-wide visibility.
+    #
+    # Object-level scoping -- which specific workspaces/workflows a caller
+    # can actually see/act on -- is a SEPARATE pair of actions, resolved by
+    # rm_auth_tenant.authorization.access_scope + EntityAccessGrant (not
+    # Casbin, not an owner_id kwarg threaded through services -- see
+    # rm_auth_tenant/authorization/DESIGN.md for the full rationale):
+    #   - "owner_only": caller sees/manages entities THEY created
+    #   - "shared":     caller ALSO sees/manages entities explicitly shared
+    #                   with them (EntityAccessGrant rows with role
+    #                   viewer/editor/owner, action-gated -- see
+    #                   access_scope.ROLES_ALLOWING_ACTION)
+    #   - "manage_all": bypasses object-level scoping entirely -- tenant-wide,
+    #                   for real admin/enterprise personas. Deliberately NOT
+    #                   granted here -- a community/self-serve user should
+    #                   never see every other user's data by default.
+    # Every action each view actually gates on must be listed -- "manage"
+    # does NOT imply edit/view/publish/share (Casbin has no action
+    # hierarchy; casbin_model.conf's matcher is an exact match). Missing one
+    # here means a default-persona user gets 403 on that specific endpoint
+    # even though they can already CRUD the workflow itself.
+    "DEFAULT_PERSONA_PERMISSIONS": [
+        ("workspace", "manage"),
+        ("workspace", "owner_only"),
+        ("workspace", "shared"),
+        ("workflow", "manage"),
+        ("workflow", "owner_only"),
+        ("workflow", "shared"),
+        ("workflow", "edit"),
+        ("workflow", "view"),
+        ("workflow", "publish"),
+        ("workflow", "share"),
+    ],
     # --- Signup email verification (community edition) ---
     # Feature-flagged and OFF by default -- local/dev signup stays
     # frictionless (new users are active/verified immediately, same as

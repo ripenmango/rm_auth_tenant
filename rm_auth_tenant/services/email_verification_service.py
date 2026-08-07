@@ -1,4 +1,4 @@
-from django.conf import settings
+
 from django.core import signing
 from django.core.mail import send_mail
 
@@ -6,6 +6,7 @@ from drf_base_app.logging.logger import get_logger
 
 from rm_auth_tenant.accounts.repositories import AccountRepository
 from rm_auth_tenant.audit.service import AuditService
+from rm_auth_tenant.conf import rm_auth_tenant_settings
 
 logger = get_logger(__name__)
 
@@ -43,7 +44,7 @@ class EmailVerificationService:
 
     @staticmethod
     def is_enabled() -> bool:
-        return bool(settings.RM_AUTH.get("SIGNUP_EMAIL_VERIFICATION_ENABLED", False))
+        return bool(rm_auth_tenant_settings.signup_email_verification_enabled)
 
     def generate_token(self, tenant_id: str, user_id: int) -> str:
         return signing.dumps(
@@ -58,18 +59,11 @@ class EmailVerificationService:
         instead of actually sending anything.
         """
         token = self.generate_token(tenant_id, user.id)
-        url_template = settings.RM_AUTH.get(
-            "EMAIL_VERIFICATION_URL",
-            "http://localhost:3000/verify-email?token={token}",
-        )
+        url_template = rm_auth_tenant_settings.email_verification_url
         verify_url = url_template.format(token=token)
-        ttl_hours = settings.RM_AUTH.get(
-            "EMAIL_VERIFICATION_TTL_SECONDS", 60 * 60 * 24 * 3
-        ) // 3600
+        ttl_hours = rm_auth_tenant_settings.email_verification_ttl_seconds // 3600
 
-        logger.info(
-            "email_verification.sent", tenant_id=tenant_id, user_id=user.id
-        )
+        logger.info("email_verification.sent", tenant_id=tenant_id, user_id=user.id)
         send_mail(
             subject="Verify your email address",
             message=(
@@ -78,7 +72,7 @@ class EmailVerificationService:
                 f"This link expires in {ttl_hours} hours. If you didn't "
                 "sign up for this account, you can safely ignore this email."
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
+            from_email=rm_auth_tenant_settings.default_from_email,
             recipient_list=[user.email],
             fail_silently=False,
         )
@@ -96,7 +90,7 @@ class EmailVerificationService:
         no-op, not an error (a user might click the link twice, or click it
         after a stale page reload).
         """
-        ttl = settings.RM_AUTH.get("EMAIL_VERIFICATION_TTL_SECONDS", 60 * 60 * 24 * 3)
+        ttl = rm_auth_tenant_settings.email_verification_ttl_seconds
         try:
             payload = signing.loads(token, salt=_SIGNING_SALT, max_age=ttl)
         except signing.SignatureExpired as exc:

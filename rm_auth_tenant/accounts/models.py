@@ -2,6 +2,7 @@ from drf_base_app import models
 from drf_base_app.models.base import (
     RMAbstractBaseUser,
     RMAuditModel,
+    RMPublicIdModel,
     RMSluggedModel,
     BaseUserManager,
 )
@@ -59,13 +60,14 @@ class UserManager(BaseUserManager):
         return self.get(username=username)
 
 
-class User(RMAbstractBaseUser, RMSluggedModel):
+class User(RMAbstractBaseUser, RMSluggedModel, RMPublicIdModel):
     """
     Tenant-scoped user. Deliberately does NOT use Django's PermissionsMixin --
     authorization is handled entirely by rm_auth.policy (Casbin), not by
     Django's built-in groups/permissions framework (see design doc §4-6).
     """
 
+    public_id_prefix = "usr"
     slug_source_field = "username"
 
     tenant_id = models.CharField(max_length=64, db_index=True)

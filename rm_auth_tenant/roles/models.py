@@ -1,10 +1,12 @@
 from drf_base_app import models
-from drf_base_app.models.base import RMAuditModel, RMSluggedModel
+from drf_base_app.models.base import RMAuditModel, RMPublicIdModel, RMSluggedModel
 from django.db import models as dj_models
 
 
-class Role(RMAuditModel, RMSluggedModel):
+class Role(RMAuditModel, RMSluggedModel, RMPublicIdModel):
     """A named set of Permissions (§5 of design doc)."""
+
+    public_id_prefix = "rol"
 
     tenant_id = models.CharField(max_length=64, db_index=True)
     name = models.CharField(max_length=100)
@@ -59,12 +61,14 @@ class PersonaRole(RMAuditModel):
         ]
 
 
-class Persona(RMAuditModel, RMSluggedModel):
+class Persona(RMAuditModel, RMSluggedModel, RMPublicIdModel):
     """
     A named bundle of Roles representing "how a user is acting" (§5). A user
     can be eligible for several personas but only one is active per session
     (§5 decision: persona is selected per session, fixed for its lifetime).
     """
+
+    public_id_prefix = "per"
 
     tenant_id = models.CharField(max_length=64, db_index=True)
     name = models.CharField(max_length=100)

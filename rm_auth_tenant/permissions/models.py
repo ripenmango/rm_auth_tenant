@@ -1,7 +1,7 @@
 from django.db import models as dj_models
 
 from drf_base_app import models
-from drf_base_app.models.base import RMAuditModel, RMSluggedModel
+from drf_base_app.models.base import RMAuditModel, RMPublicIdModel, RMSluggedModel
 
 # Action stays behind in the (shared) rm_auth app -- it's platform-wide
 # vocabulary, not tenant data. This is the one intentional cross-app
@@ -14,8 +14,10 @@ from rm_auth.permissions.models import Action
 __all__ = ["Action", "Resource", "Permission"]
 
 
-class Resource(RMAuditModel, RMSluggedModel):
+class Resource(RMAuditModel, RMSluggedModel, RMPublicIdModel):
     """A protectable resource type, e.g. "workflow", "form", "user"."""
+
+    public_id_prefix = "res"
 
     tenant_id = models.CharField(max_length=64, db_index=True)
     name = models.CharField(max_length=100)
@@ -52,13 +54,16 @@ class Permission(RMAuditModel):
 
     tenant_id = models.CharField(max_length=64, db_index=True)
     role = models.ForeignKey(
-        "rm_auth_tenant.Role", on_delete=dj_models.CASCADE, related_name="permissions"
+        "rm_auth_tenant.Role",
+        to_field="public_id",
+        on_delete=dj_models.CASCADE,
+        related_name="permissions",
     )
     resource = models.ForeignKey(
-        Resource, on_delete=dj_models.CASCADE, related_name="permissions"
+        Resource, to_field="public_id", on_delete=dj_models.CASCADE, related_name="permissions"
     )
     action = models.ForeignKey(
-        Action, on_delete=dj_models.CASCADE, related_name="permissions"
+        Action, to_field="public_id", on_delete=dj_models.CASCADE, related_name="permissions"
     )
 
     class Meta:

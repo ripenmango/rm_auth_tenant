@@ -68,6 +68,16 @@ class RMAuthTenantSettings(RMAuthSettings):
             ("workflow", "view"),
             ("workflow", "publish"),
             ("workflow", "share"),
+            # Project has no publish/share sub-endpoints of its own (unlike
+            # workflow) -- object-level scoping only ever resolves via
+            # owner_only/shared (see access_scope.resolve_allowed_roles and its
+            # callers in rm_workflow's views.py: ProjectViewSet's own
+            # RequiresPermission gate, plus _check_entity_access(...,"project",
+            # ...,"edit") when a workflow references one). Same 3-tuple shape
+            # as workspace, for the same reason.
+            ("project", "manage"),
+            ("project", "owner_only"),
+            ("project", "shared"),
         ],
         # --- Signup email verification (community edition) ---
         # Feature-flagged and OFF by default -- local/dev signup stays

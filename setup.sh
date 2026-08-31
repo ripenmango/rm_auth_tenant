@@ -29,6 +29,7 @@ DO_DOCKER_BUILD=false
 DO_UP=false
 DO_PUBLISH=false
 DO_CLEAN=false
+DO_REINSTALL=false
 
 log()   { printf '\033[1;34m[setup]\033[0m %s\n' "$1"; }
 error() { printf '\033[1;31m[error]\033[0m %s\n' "$1" >&2; }
@@ -53,6 +54,10 @@ Options:
   --up              Start the stack via 'docker compose up'
   --clean           Remove build artifacts (dist/, build/, *.egg-info,
                      __pycache__/, .pytest_cache/) and exit
+  --reinstall       Uninstall all local rm-* and drf-base packages from the
+                     venv (so they get reinstalled fresh from pyproject.toml),
+                     then build a wheel-only artifact via
+                     'python -m build --wheel'
   -h, --help        Show this help message and exit
 
 Always runs (no flag needed):
@@ -74,6 +79,7 @@ Examples:
   ./setup.sh --up                         # + docker compose up
   ./setup.sh --build --docker-build --up  # do everything
   ./setup.sh --clean                      # wipe build artifacts, then exit
+  ./setup.sh --reinstall                  # drop local rm-*/drf-base pkgs, reinstall, build wheel
 EOF
   exit 0
 }
@@ -85,6 +91,7 @@ for arg in "$@"; do
     --docker-build) DO_DOCKER_BUILD=true ;;
     --up)           DO_UP=true ;;
     --clean)        DO_CLEAN=true ;;
+    --reinstall)    DO_REINSTALL=true ;;
     -h|--help)      usage ;;
     *) die "Unknown argument: $arg (use --help)" ;;
   esac
@@ -120,6 +127,21 @@ fi
 source "$VENV_DIR/bin/activate"
 log "Virtual environment activated."
 
+# ---------------------------------------------------------------------------
+# 1b. Reinstall: drop local rm-*/drf-base packages so they get reinstalled fresh
+# ---------------------------------------------------------------------------
+if [ "$DO_REINSTALL" = true ]; then
+  log "Removing existing rm-* and drf-base packages from $VENV_DIR..."
+  LOCAL_PKGS="$(pip list --format=freeze 2>/dev/null | cut -d= -f1 | grep -iE '^(rm-|drf-base)' || true)"
+  if [ -n "$LOCAL_PKGS" ]; then
+    # shellcheck disable=SC2086
+    pip uninstall -y $LOCAL_PKGS
+    log "Removed: $(echo "$LOCAL_PKGS" | tr '\n' ' ')"
+  else
+    log "No installed rm-* or drf-base packages found; nothing to remove."
+  fi
+fi
+
 log "Installing dependencies from pyproject.toml..."
 pip install --upgrade pip >/dev/null
 pip install -e ".[dev]" 2>/dev/null || pip install -e . || pip install .
@@ -145,6 +167,16 @@ if [ "$DO_PUBLISH" = true ]; then
   log "(Set TWINE_USERNAME/TWINE_PASSWORD, or use a __token__ API key, as env vars to skip the interactive prompt.)"
   twine upload dist/*
   log "Published to PyPI."
+fi
+
+# ---------------------------------------------------------------------------
+# 2c. Reinstall: build wheel-only artifact
+# ---------------------------------------------------------------------------
+if [ "$DO_REINSTALL" = true ]; then
+  log "Building wheel-only package (python -m build --wheel)..."
+  pip install --upgrade build >/dev/null
+  $PYTHON_BIN -m build --wheel --outdir dist/
+  log "Wheel written to ./dist/"
 fi
 
 # ---------------------------------------------------------------------------

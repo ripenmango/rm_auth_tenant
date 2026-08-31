@@ -317,6 +317,22 @@ RM_AUTH = {
         ("project", "manage"),
         ("project", "owner_only"),
         ("project", "shared"),
+        # rm_form_store's `form` resource -- see its Architecture & Design
+        # doc, SS15 ("Authorization & Permission Model"). Added in Phase 0
+        # ahead of rm_form_store itself existing (Phase 1), same as
+        # workspace/project above, so the default persona isn't 403'd on
+        # day one of Forms shipping. Four actions, not three -- "submit" is
+        # deliberately separate from manage/owner_only/shared because who
+        # can EDIT a Form and who can SUBMIT to it are different questions
+        # (e.g. a customer-portal persona that can only submit, or a
+        # reviewer persona that can edit but shouldn't submit) -- see SS15
+        # for the full split. "access" (read the schema/settings) is NOT a
+        # separate tuple here: it rides on the existing workspace/project
+        # scoping chain, same as it does for workflow.
+        ("form", "manage"),
+        ("form", "owner_only"),
+        ("form", "shared"),
+        ("form", "submit"),
     ],
     # --- Signup email verification (community edition) ---
     # Feature-flagged and OFF by default -- local/dev signup stays

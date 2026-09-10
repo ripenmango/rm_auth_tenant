@@ -34,6 +34,23 @@ class RoleService:
     def create_role(self, tenant_id: str, name: str, description: str = "") -> Role:
         return self.roles.create_role(tenant_id, name, description)
 
+    def get_or_create_role(self, tenant_id: str, name: str, description: str = "") -> Role:
+        """Idempotent wrapper around create_role -- safe to call on a name
+        that already exists for this tenant (returns the existing Role
+        unchanged, `description` is only used for an actual creation).
+        `create_role` itself stays a plain unconditional create for a
+        caller that already knows the name is new (e.g. create_role.py's
+        CLI command, which wants an IntegrityError to surface plainly on a
+        genuine duplicate rather than silently succeeding). Use this one
+        instead wherever a caller might run more than once against the same
+        tenant -- e.g. seed_roles.py, meant to be safely re-runnable to
+        layer in newly added permissions (see that command's own
+        docstring)."""
+        try:
+            return self.get_role_by_name(tenant_id, name)
+        except RoleServiceError:
+            return self.create_role(tenant_id, name, description)
+
     def list_roles(self, tenant_id: str) -> list[Role]:
         return self.roles.list_roles(tenant_id)
 
@@ -107,6 +124,40 @@ class RoleService:
             metadata={"persona": persona.name, "roles": [r.name for r in roles]},
         )
         return persona
+
+    def get_or_create_persona(self, tenant_id: str, name: str) -> Persona:
+        """Idempotent wrapper around create_persona -- safe to call on a name
+        that already exists for this tenant (returns the existing Persona
+        unchanged, with whatever roles it already has -- pair with
+        `ensure_role_in_persona` to top up any newly-required role rather
+        than assuming a fresh creation). Same rationale as
+        `get_or_create_role` above -- e.g. seed_roles.py."""
+        try:
+            return self.get_persona_by_name(tenant_id, name)
+        except RoleServiceError:
+            return self.create_persona(tenant_id, name, roles=[])
+
+    def ensure_role_in_persona(self, tenant_id: str, persona: Persona, role: Role) -> None:
+        """Idempotent equivalent of bundling `role` into `persona` at
+        creation time (create_persona's `roles=[...]`) -- a no-op if
+        `persona` already has `role`, unlike create_persona itself which
+        only ever applies at creation. Extracted from what
+        `_sync_default_persona_permissions` below already did inline for
+        the lazily-created default persona; also used by seed_roles.py so
+        it stays safe to re-run against an already-seeded tenant."""
+        if not persona.roles.filter(pk=role.pk).exists():
+            self.roles.add_role_to_persona(persona, role)
+            # Same Casbin g(persona.slug, role.slug) wiring create_persona
+            # does for roles passed at creation time -- without this, the
+            # PersonaRole row is Django-only bookkeeping and grants nothing
+            # (see create_persona's docstring).
+            self.policy.assign_role_to_subject(
+                tenant_id,
+                persona.slug,
+                role.slug,
+                subject_type=RoleAssignment.SUBJECT_TYPE_PERSONA,
+                group_type=RoleAssignment.GROUP_TYPE_ROLE,
+            )
 
     def list_personas(self, tenant_id: str) -> list[Persona]:
         return self.roles.list_personas(tenant_id)
@@ -204,19 +255,7 @@ class RoleService:
             if (resource, action) not in already_granted:
                 self.grant_permission(tenant_id, role, resource, action)
 
-        if not persona.roles.filter(pk=role.pk).exists():
-            self.roles.add_role_to_persona(persona, role)
-            # Same Casbin g(persona.slug, role.slug) wiring create_persona
-            # does for roles passed at creation time -- without this, the
-            # PersonaRole row is Django-only bookkeeping and grants nothing
-            # (see create_persona's docstring).
-            self.policy.assign_role_to_subject(
-                tenant_id,
-                persona.slug,
-                role.slug,
-                subject_type=RoleAssignment.SUBJECT_TYPE_PERSONA,
-                group_type=RoleAssignment.GROUP_TYPE_ROLE,
-            )
+        self.ensure_role_in_persona(tenant_id, persona, role)
 
     @transaction.atomic
     def assign_persona(

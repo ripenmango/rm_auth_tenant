@@ -15,13 +15,28 @@ class Command(BaseCommand):
         "Seeds a tenant with a bootstrap admin user + role/persona data, so "
         "the API can be exercised immediately after `migrate`.\n\n"
         "The admin user is given a `platform_admin` persona (role:manage, "
-        "persona:manage, user:manage -- see RoleViewSet/PersonaViewSet/UserViewSet in "
-        "api/views.py) so it can administer roles/personas/users through the API "
-        "without needing Django's is_superuser. This is DELIBERATELY separate from "
-        "Django admin-site access (see auth-library-architecture.md -- "
-        "`is_superuser` and Casbin-backed API permissions are two independent "
-        "systems; this command only sets up the latter). Create a Django superuser "
-        "separately, with `manage.py createsuperuser`, if you also need /admin/ access.\n\n"
+        "persona:manage, user:manage, execution:create, execution:view, "
+        "execution:resume -- see RoleViewSet/PersonaViewSet/UserViewSet and "
+        "rm_engine_app's ExecutionListCreateView/ExecutionDetailView/"
+        "NodeExecutionResumeView in their respective api/views.py) so it can "
+        "administer roles/personas/users AND drive/resume workflow executions "
+        "through the API without needing Django's is_superuser. This is "
+        "DELIBERATELY separate from Django admin-site access (see "
+        "auth-library-architecture.md -- `is_superuser` and Casbin-backed API "
+        "permissions are two independent systems; this command only sets up "
+        "the latter). Create a Django superuser separately, with "
+        "`manage.py createsuperuser`, if you also need /admin/ access.\n\n"
+        "Safe to run more than once against an already-seeded tenant -- role/"
+        "persona lookups fall back to get-or-create rather than an "
+        "unconditional create (see RoleService.get_or_create_role/"
+        "get_or_create_persona/ensure_role_in_persona), and grant_permission "
+        "is already idempotent on its own. Re-running is how a newly added "
+        "permission (e.g. this command's own execution:resume, added "
+        "alongside Sprint 7's resume endpoint) reaches an existing tenant's "
+        "admin role/persona -- for granting ONE new permission to a role that "
+        "already exists, `manage.py grant_permission` is the more surgical "
+        "tool and doesn't touch personas/users at all; use this command when "
+        "you want the full bootstrap set applied/topped-up in one call.\n\n"
         "By default the admin user gets exactly ONE persona (`Platform Admin`), so "
         "`/login` auto-selects it and never requires `persona_id` in the request "
         "(see authorization-request-flow.md §2 -- login auto-selects when there's "
@@ -120,22 +135,34 @@ class Command(BaseCommand):
 
         role_service = RoleService()
 
-        # -- Bootstrap admin: role/persona administration via the API itself --
-        admin_role = role_service.create_role(
+        # -- Bootstrap admin: role/persona administration via the API itself,
+        # plus driving/resuming workflow executions (Sprint 7) --
+        # get_or_create_role/get_or_create_persona/ensure_role_in_persona
+        # (rather than create_role/create_persona directly) is what makes this
+        # command safe to re-run against a tenant it already seeded -- see
+        # this command's own docstring.
+        admin_role = role_service.get_or_create_role(
             tenant_id, "platform_admin", "Can administer roles and personas"
         )
-        role_service.grant_permission(
-            tenant_id, admin_role, resource="role", action="manage"
-        )
-        role_service.grant_permission(
-            tenant_id, admin_role, resource="persona", action="manage"
-        )
-        role_service.grant_permission(
-            tenant_id, admin_role, resource="user", action="manage"
-        )
-        admin_persona = role_service.create_persona(
-            tenant_id, "Platform Admin", roles=[admin_role]
-        )
+        for resource, action in [
+            ("role", "manage"),
+            ("persona", "manage"),
+            ("user", "manage"),
+            # Sprint 7: lets the seeded admin exercise rm_engine_app's
+            # Execution API (start/view/resume) out of the box, the same way
+            # it already can administer roles/personas/users. grant_permission
+            # is idempotent on its own (Permission.objects.get_or_create +
+            # Casbin add_policy, a no-op on an existing policy tuple), so
+            # these are safe to re-grant every time this command runs.
+            ("execution", "create"),
+            ("execution", "view"),
+            ("execution", "resume"),
+        ]:
+            role_service.grant_permission(
+                tenant_id, admin_role, resource=resource, action=action
+            )
+        admin_persona = role_service.get_or_create_persona(tenant_id, "Platform Admin")
+        role_service.ensure_role_in_persona(tenant_id, admin_persona, admin_role)
 
         editor_persona = None
         if with_demo_persona:
@@ -143,18 +170,15 @@ class Command(BaseCommand):
             # persona-selection flow. Off by default -- see --with-demo-persona
             # help text and default-tenant-and-persona.md for why a freshly
             # seeded admin having exactly one persona is the better default.
-            editor_role = role_service.create_role(
+            editor_role = role_service.get_or_create_role(
                 tenant_id, "workflow_editor", "Can edit workflows"
             )
-            role_service.grant_permission(
-                tenant_id, editor_role, resource="workflow", action="edit"
-            )
-            role_service.grant_permission(
-                tenant_id, editor_role, resource="workflow", action="view"
-            )
-            editor_persona = role_service.create_persona(
-                tenant_id, "Branch Manager", roles=[editor_role]
-            )
+            for resource, action in [("workflow", "edit"), ("workflow", "view")]:
+                role_service.grant_permission(
+                    tenant_id, editor_role, resource=resource, action=action
+                )
+            editor_persona = role_service.get_or_create_persona(tenant_id, "Branch Manager")
+            role_service.ensure_role_in_persona(tenant_id, editor_persona, editor_role)
 
         accounts = AccountRepository()
         user = accounts.get_user(tenant_id, admin_username)
@@ -170,7 +194,10 @@ class Command(BaseCommand):
         if editor_persona is not None:
             role_service.assign_persona(tenant_id, user.id, editor_persona)
 
-        persona_summary = f"{admin_persona.name!r} (role:manage, persona:manage, user:manage) [default]"
+        persona_summary = (
+            f"{admin_persona.name!r} (role:manage, persona:manage, user:manage, "
+            f"execution:create, execution:view, execution:resume) [default]"
+        )
         if editor_persona is not None:
             persona_summary += (
                 f", {editor_persona.name!r} (workflow:edit, workflow:view)"

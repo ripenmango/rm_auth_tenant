@@ -50,6 +50,14 @@ class RoleRepository:
         create_persona's loop above -- idempotent, safe to call repeatedly."""
         PersonaRole.objects.get_or_create(persona=persona, role=role)
 
+    def user_ids_with_role(self, tenant_id: str, role_name: str) -> list[int]:
+        """Users eligible for any persona that bundles the named role."""
+        return list(
+            UserPersonaAssignment.objects.filter(tenant_id=tenant_id, persona__roles__name=role_name)
+            .values_list("user_id", flat=True)
+            .distinct()
+        )
+
     def eligible_personas(self, tenant_id: str, user_id: int) -> list[Persona]:
         assignments = UserPersonaAssignment.objects.filter(
             tenant_id=tenant_id, user_id=user_id

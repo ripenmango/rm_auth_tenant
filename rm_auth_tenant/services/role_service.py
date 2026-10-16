@@ -325,6 +325,9 @@ class RoleService:
     def eligible_personas(self, tenant_id: str, user_id: int) -> list[Persona]:
         return self.roles.eligible_personas(tenant_id, user_id)
 
+    def user_ids_with_role(self, tenant_id: str, role_name: str) -> list[int]:
+        return self.roles.user_ids_with_role(tenant_id, role_name)
+
     def user_permissions(self, tenant_id: str, persona: Persona) -> set[str]:
         """
         Expands a persona's roles into a flat "resource:action" permission

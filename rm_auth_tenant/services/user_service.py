@@ -29,6 +29,10 @@ class UserService:
     def list_users(self, tenant_id: str):
         return self.accounts.list_users(tenant_id)
 
+    def list_users_by_role(self, tenant_id: str, role_name: str):
+        """Active users who can act under a persona that bundles `role_name`. Called in-process (no `user:manage` needed)."""
+        return self.accounts.list_users(tenant_id).filter(id__in=self.roles.user_ids_with_role(tenant_id, role_name))
+
     def get_user(self, tenant_id: str, user_id: int):
         user = self.accounts.get_user_by_id(tenant_id, user_id)
         if user is None:

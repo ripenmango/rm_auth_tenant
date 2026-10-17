@@ -109,7 +109,16 @@ class UserService:
     def deactivate_user(self, tenant_id: str, user_id: int) -> None:
         user = self.get_user(tenant_id, user_id)
         self.accounts.deactivate_user(user)
-        # Same pattern as AuthenticationService.change_password (§7): a
-        # user-state change that should invalidate outstanding sessions.
+        self._end_sessions(tenant_id, user)
+
+    def revoke_sessions(self, tenant_id: str, user_id: int) -> None:
+        """Ends every outstanding session of the user (same pattern as
+        AuthenticationService.change_password, §7: bump the token version and
+        revoke refresh tokens). Call it after changing what the user may do --
+        row scope and task visibility read the persona named in the token, so
+        an old token would otherwise keep the old access until it expires."""
+        self._end_sessions(tenant_id, self.get_user(tenant_id, user_id))
+
+    def _end_sessions(self, tenant_id: str, user) -> None:
         self.accounts.bump_version(user)
-        self.refresh_store.revoke_all_for_user(tenant_id, user_id)
+        self.refresh_store.revoke_all_for_user(tenant_id, user.id)
